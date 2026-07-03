@@ -115,5 +115,12 @@
             android:padding="8dp"
             android:textSize="13sp" />
 
+        <Button
+            android:id="@+id/btnOpenLog"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="📋 查看运行日志" />
+
     </LinearLayout>
 </ScrollView>
