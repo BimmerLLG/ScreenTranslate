@@ -8,6 +8,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
 import android.widget.TextView
+import com.screentranslate.logger.L
 import com.screentranslate.translate.TranslationManager
 
 class OverlayManager(private val context: Context) {
@@ -20,6 +21,7 @@ class OverlayManager(private val context: Context) {
 
     fun showOverlay() {
         if (overlayView != null) return
+        L.d("Overlay", "Showing overlay")
 
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
@@ -122,6 +124,7 @@ class OverlayManager(private val context: Context) {
     }
 
     fun hideAllBubbles() {
+        L.d("Overlay", "Hiding ${activeBubbles.size} bubbles")
         activeBubbles.values.forEach { view ->
             try {
                 windowManager.removeView(view)
@@ -133,6 +136,7 @@ class OverlayManager(private val context: Context) {
     }
 
     fun hideOverlay() {
+        L.d("Overlay", "Hiding overlay")
         hideAllBubbles()
         overlayView?.let {
             try {

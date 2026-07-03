@@ -1,11 +1,11 @@
 package com.screentranslate.ui
 
 import android.content.Context
+import android.content.Intent
 import android.content.SharedPreferences
 import android.os.Bundle
 import android.widget.Button
 import android.widget.EditText
-import android.widget.RadioGroup
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -46,7 +46,11 @@ class SettingsActivity : AppCompatActivity() {
                 findViewById<TextView>(R.id.tvTestResult).text = "翻译中..."
                 val result = withContext(Dispatchers.Default) {
                     translationManager.testTranslation(testText, mode)
-                }
+        }
+
+        findViewById<Button>(R.id.btnOpenLog).setOnClickListener {
+            startActivity(Intent(this, LogActivity::class.java))
+        }
                 findViewById<TextView>(R.id.tvTestResult).text =
                     "原文: $testText\n译文: $result"
             }

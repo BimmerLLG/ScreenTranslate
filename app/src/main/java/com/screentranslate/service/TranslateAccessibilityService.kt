@@ -7,11 +7,11 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Intent
 import android.os.Build
-import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import androidx.core.app.NotificationCompat
 import com.screentranslate.collector.AccessibilityCollector
 import com.screentranslate.collector.TextSorter
+import com.screentranslate.logger.L
 import com.screentranslate.overlay.OverlayManager
 import com.screentranslate.translate.TranslationManager
 import kotlinx.coroutines.CoroutineScope
@@ -57,6 +57,9 @@ class TranslateAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
         if (!enabled) return
 
+        val pkg = event.packageName ?: return
+        L.d(TAG, "Event: ${event.eventType} pkg=$pkg")
+
         val now = System.currentTimeMillis()
         if (now - debounceTimer < 600) return
         debounceTimer = now
@@ -69,17 +72,29 @@ class TranslateAccessibilityService : AccessibilityService() {
     }
 
     private suspend fun processScreenContent() {
-        val root = rootInActiveWindow ?: return
+        val root = rootInActiveWindow ?: run {
+            L.w(TAG, "rootInActiveWindow is null")
+            return
+        }
         try {
             val rawNodes = collector.collectVisibleText(root)
-            if (rawNodes.isEmpty()) return
+            if (rawNodes.isEmpty()) {
+                L.d(TAG, "No visible text nodes found")
+                return
+            }
 
             val merged = TextSorter.mergeAdjacentText(rawNodes)
             val contentHash = merged.sumOf { it.text.hashCode() }
-            if (contentHash == lastProcessedHash) return
+            if (contentHash == lastProcessedHash) {
+                L.d(TAG, "Content unchanged, skip")
+                return
+            }
             lastProcessedHash = contentHash
 
+            L.d(TAG, "Detected ${merged.size} text blocks: ${merged.map { it.text.take(30) }}")
+
             val results = translationManager.translateNodes(merged)
+            L.d(TAG, "Translated ${results.size} blocks")
 
             launch(Dispatchers.Main) {
                 if (results.isNotEmpty()) {
@@ -88,11 +103,13 @@ class TranslateAccessibilityService : AccessibilityService() {
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error", e)
+            L.e(TAG, "processScreenContent error", e)
         }
     }
 
-    override fun onInterrupt() {}
+    override fun onInterrupt() {
+        L.d(TAG, "Service interrupted")
+    }
 
     override fun onDestroy() {
         overlayManager.hideOverlay()
@@ -104,12 +121,14 @@ class TranslateAccessibilityService : AccessibilityService() {
         overlayManager.showOverlay()
         val notification = buildNotification()
         startForeground(NOTIFICATION_ID, notification)
+        L.d(TAG, "Translation started")
     }
 
     fun stopTranslating() {
         enabled = false
         overlayManager.hideOverlay()
         stopForeground(STOP_FOREGROUND_REMOVE)
+        L.d(TAG, "Translation stopped")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {

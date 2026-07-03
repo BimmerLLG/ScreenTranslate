@@ -3,6 +3,7 @@ package com.screentranslate.translate
 import android.content.Context
 import android.content.SharedPreferences
 import com.screentranslate.collector.TextNode
+import com.screentranslate.logger.L
 
 class TranslationManager(private val context: Context) {
 
@@ -41,9 +42,12 @@ class TranslationManager(private val context: Context) {
         val targetLang = getTargetLang()
         val mode = getTranslationMode()
 
+        L.d("TranslateMgr", "Translating ${nodes.size} nodes, mode=$mode, src=$sourceLang, tgt=$targetLang")
+
         for (node in nodes) {
             val cacheKey = "${node.text}|$sourceLang|$targetLang|$mode"
             val translated = cache.getOrPut(cacheKey) {
+                L.d("TranslateMgr", "Translating: \"${node.text.take(50)}\"")
                 try {
                     when (mode) {
                         "ai" -> aiTranslator.translate(node.text, sourceLang, targetLang)
@@ -51,10 +55,12 @@ class TranslationManager(private val context: Context) {
                         else -> aiTranslator.translate(node.text, sourceLang, targetLang)
                     }
                 } catch (e: Exception) {
+                    L.e("TranslateMgr", "Translation failed for \"${node.text.take(30)}\"", e)
                     "[翻译失败] ${node.text}"
                 }
             }
             results.add(TranslationResult(node.text, translated, node.bounds))
+            L.d("TranslateMgr", "Result: \"${node.text.take(30)}\" → \"$translated\"")
         }
 
         return results
