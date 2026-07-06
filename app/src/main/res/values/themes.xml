@@ -1,11 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.ScreenTranslate" parent="Theme.AppCompat.DayNight.DarkActionBar">
-        <item name="colorPrimary">#FF2196F3</item>
-        <item name="colorPrimaryVariant">#FF1976D2</item>
-        <item name="colorOnPrimary">#FFFFFFFF</item>
-        <item name="colorSecondary">#FF00BCD4</item>
-        <item name="colorSecondaryVariant">#FF0097A7</item>
-        <item name="colorOnSecondary">#FFFFFFFF</item>
-    </style>
+    <style name="Theme.ScreenTranslate" parent="android:Theme.Material.Light.NoActionBar" />
 </resources>

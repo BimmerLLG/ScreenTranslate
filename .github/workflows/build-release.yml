@@ -1,0 +1,50 @@
+name: Build Release APK
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Build Debug APK
+        run: ./gradlew assembleDebug
+
+      - name: Rename APK
+        run: mv app/build/outputs/apk/debug/app-debug.apk ScreenTranslate-${{ github.ref_name }}.apk
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ScreenTranslate ${{ github.ref_name }}
+          body: |
+            ### 安装说明
+            1. 下载并安装 APK
+            2. 打开 App，按提示依次授予：
+               - 无障碍服务权限
+               - 悬浮窗权限
+               - 通知权限
+            3. 配置 AI 翻译 API（设置 → 翻译引擎 → AI 翻译）
+            4. 或使用 Google 离线翻译（无需配置）
+
+            > Debug APK 已使用 Android 调试证书签名，可直接安装。
+            > 如需 Release 签名 APK，请自行配置签名后运行 `./gradlew assembleRelease`。
+          files: ScreenTranslate-*.apk
+          draft: false
+          prerelease: false

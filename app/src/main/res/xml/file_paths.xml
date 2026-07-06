@@ -1,4 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+    file_paths.xml - FileProvider 路径配置
+    定义可以通过 FileProvider 安全分享的文件目录
+-->
 <paths>
-    <files-path name="logs" path="logs/" />
+    <files-path name="logs" path="logs/" />  <!-- 日志文件目录 -->
 </paths>
