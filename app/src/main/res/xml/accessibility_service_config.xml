@@ -1,9 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+    accessibility_service_config.xml - 无障碍服务配置
+    定义无障碍服务监听的事件类型、标志和行为
+-->
 <accessibility-service
     xmlns:android="http://schemas.android.com/apk/res/android"
     android:accessibilityEventTypes="typeAllMask"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:accessibilityFlags="flagIncludeNotImportantViews|flagReportViewIds|flagRetrieveInteractiveWindows"
     android:canRetrieveWindowContent="true"
-    android:description="屏幕翻译服务 - 实时提取屏幕文字并翻译"
+    android:description="@string/accessibility_service_description"
     android:notificationTimeout="500" />
