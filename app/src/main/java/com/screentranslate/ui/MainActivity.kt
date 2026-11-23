@@ -26,13 +26,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalLifecycleOwner
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.repeatOnLifecycle
 import com.screentranslate.logger.L
 import com.screentranslate.ocr.ScreenCapture
 import com.screentranslate.service.KeepAliveService
@@ -57,7 +55,12 @@ class MainActivity : ComponentActivity() {
             val intent = Intent(this, TranslateAccessibilityService::class.java).apply {
                 action = TranslateAccessibilityService.ACTION_INIT_OCR
             }
-            startService(intent)
+            // 服务内部会进入前台（MEDIA_PROJECTION 类型），用 startForegroundService 更稳妥
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(intent)
+            } else {
+                startService(intent)
+            }
             Toast.makeText(this, "截屏权限已获取，长按「译」即可使用 OCR 翻译", Toast.LENGTH_LONG).show()
             L.d("Main", "截屏权限授权成功")
         } else {
@@ -112,7 +115,9 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(context: Context) {
-    var serviceStarted by remember { mutableStateOf(false) }
+    val prefs = remember { context.getSharedPreferences("translate_prefs", Context.MODE_PRIVATE) }
+    // 服务开关以持久化状态为准，重启 App 后不会和实际运行状态不一致
+    var serviceStarted by remember { mutableStateOf(prefs.getBoolean("service_enabled", false)) }
     var accessibilityOk by remember { mutableStateOf(context.isAccessibilityServiceEnabled()) }
     var overlayOk by remember {
         mutableStateOf(
@@ -120,6 +125,7 @@ fun MainScreen(context: Context) {
                 Settings.canDrawOverlays(context) else true
         )
     }
+    var captureOk by remember { mutableStateOf(ScreenCapture.hasPermission) }
 
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
@@ -128,7 +134,9 @@ fun MainScreen(context: Context) {
                 accessibilityOk = context.isAccessibilityServiceEnabled()
                 overlayOk = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
                     Settings.canDrawOverlays(context) else true
-                L.d("Main", "权限检查: 无障碍=${accessibilityOk}, 悬浮窗=${overlayOk}")
+                captureOk = ScreenCapture.hasPermission
+                serviceStarted = prefs.getBoolean("service_enabled", false)
+                L.d("Main", "权限检查: 无障碍=${accessibilityOk}, 悬浮窗=${overlayOk}, 截屏=${captureOk}")
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -193,8 +201,8 @@ fun MainScreen(context: Context) {
             Spacer(Modifier.height(8.dp))
 
             SettingsButton(
-                icon = Icons.Default.CameraAlt,
-                text = "开启截屏权限（OCR 翻译）",
+                icon = if (captureOk) Icons.Default.CheckCircle else Icons.Default.CameraAlt,
+                text = if (captureOk) "截屏权限已开启（OCR 可用）" else "开启截屏权限（OCR 翻译）",
                 onClick = {
                     val manager = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE)
                             as MediaProjectionManager
@@ -207,6 +215,7 @@ fun MainScreen(context: Context) {
             ServiceStatusCard(
                 accessibilityOk = accessibilityOk,
                 overlayOk = overlayOk,
+                captureOk = captureOk,
                 serviceStarted = serviceStarted
             )
 
@@ -214,29 +223,47 @@ fun MainScreen(context: Context) {
 
             Button(
                 onClick = {
-                    if (!overlayOk) return@Button
-                    serviceStarted = !serviceStarted
+                    if (!overlayOk) {
+                        Toast.makeText(context, "请先开启悬浮窗权限", Toast.LENGTH_LONG).show()
+                        return@Button
+                    }
+                    // 启动前必须已开启无障碍服务，否则服务不会真正工作
+                    if (!serviceStarted && !accessibilityOk) {
+                        Toast.makeText(context, "请先开启无障碍服务，再启动翻译", Toast.LENGTH_LONG).show()
+                        return@Button
+                    }
+                    val target = !serviceStarted
                     val intent = Intent(context, TranslateAccessibilityService::class.java)
-                    intent.action = if (serviceStarted)
+                    intent.action = if (target)
                         TranslateAccessibilityService.ACTION_START
                     else
                         TranslateAccessibilityService.ACTION_STOP
-                    L.d("Main", "发送 ${if (serviceStarted) "ACTION_START" else "ACTION_STOP"}")
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
-                        context.startForegroundService(intent)
-                    else
-                        context.startService(intent)
-                    // 更新保活通知状态
-                    KeepAliveService.updateStatus(context, serviceStarted)
-                    L.d("Main", "保活状态更新: isRunning=$serviceStarted")
-                    if (serviceStarted) {
-                        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                            (context as? android.app.Activity)?.moveTaskToBack(true)
-                        }, 500)
+                    L.d("Main", "发送 ${if (target) "ACTION_START" else "ACTION_STOP"}")
+                    try {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                            context.startForegroundService(intent)
+                        else
+                            context.startService(intent)
+                        serviceStarted = target
+                        // 更新保活通知状态
+                        KeepAliveService.updateStatus(context, target)
+                        L.d("Main", "保活状态更新: isRunning=$target")
+                        if (target) {
+                            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                                (context as? android.app.Activity)?.moveTaskToBack(true)
+                            }, 500)
+                        }
+                    } catch (e: Exception) {
+                        L.e("Main", "启动/停止翻译服务失败", e)
+                        Toast.makeText(
+                            context,
+                            "服务操作失败：${e.message?.take(40) ?: "未知错误"}",
+                            Toast.LENGTH_LONG
+                        ).show()
                     }
                 },
-                modifier = Modifier.fillMaxWidth().height(52.dp),
-                enabled = overlayOk
+                modifier = Modifier.fillMaxWidth().height(52.dp)
+                // 保持可点击：缺少权限时点击会通过 Toast 明确告知原因，而不是静默禁用
             ) {
                 Icon(
                     if (serviceStarted) Icons.Default.Stop else Icons.Default.PlayArrow,
@@ -270,6 +297,7 @@ fun SettingsButton(
 fun ServiceStatusCard(
     accessibilityOk: Boolean,
     overlayOk: Boolean,
+    captureOk: Boolean,
     serviceStarted: Boolean
 ) {
     Card(
@@ -279,9 +307,11 @@ fun ServiceStatusCard(
         )
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
-            StatusRow(Icons.Default.CheckCircle, "无障碍服务", accessibilityOk)
+            StatusRow(Icons.Default.Accessibility, "无障碍服务", accessibilityOk)
             Spacer(Modifier.height(8.dp))
-            StatusRow(Icons.Default.CheckCircle, "悬浮窗权限", overlayOk)
+            StatusRow(Icons.Default.PictureInPicture, "悬浮窗权限", overlayOk)
+            Spacer(Modifier.height(8.dp))
+            StatusRow(Icons.Default.CameraAlt, "截屏权限（OCR）", captureOk)
             Spacer(Modifier.height(8.dp))
             HorizontalDivider()
             Spacer(Modifier.height(8.dp))

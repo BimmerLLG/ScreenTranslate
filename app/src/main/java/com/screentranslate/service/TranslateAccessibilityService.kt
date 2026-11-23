@@ -50,10 +50,18 @@ class TranslateAccessibilityService : AccessibilityService() {
     private var currentJob: Job? = null          // 当前正在执行的翻译任务
     private var lastProcessedHash = 0            // 上次处理的内容哈希值（用于去重）
     private var debounceTimer: Long = 0L         // 防抖计时器
+    private var overlayUpdateReceiver: android.content.BroadcastReceiver? = null
 
     override fun onCreate() {
         super.onCreate()
-        translationManager = TranslationManager(this)
+        translationManager = TranslationManager(this).apply {
+            // 翻译出错时在主线程弹 Toast（一次任务内只报一次，避免刷屏）
+            onError = { msg ->
+                scope.launch {
+                    withContext(Dispatchers.Main) { toast(msg) }
+                }
+            }
+        }
         ocrTextCollector = OcrTextCollector(this)
         // 截屏权限不在 onCreate 处理，只在 ACTION_INIT_OCR 的 onStartCommand 中处理
         // 因为 Android 14+ 要求先调用 startForeground(MEDIA_PROJECTION) 后才能创建 MediaProjection
@@ -64,8 +72,53 @@ class TranslateAccessibilityService : AccessibilityService() {
                     processOcrContent()
                 }
             }
+            onParagraphTranslate = { x, y ->
+                scope.launch {
+                    lastProcessedHash = 0
+                    processOcrAtPoint(x, y)
+                }
+            }
         }
         createNotificationChannel()
+        registerOverlayUpdateReceiver()
+    }
+
+    /** 设置页「重置悬浮窗位置」后，重摆指示器让它立刻生效；模型下载完成后重载 OCR。 */
+    private fun registerOverlayUpdateReceiver() {
+        val filter = android.content.IntentFilter().apply {
+            addAction(ACTION_UPDATE_OVERLAY)
+            addAction(ACTION_OCR_MODELS_READY)
+        }
+        val receiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(ctx: android.content.Context?, intent: Intent?) {
+                when (intent?.action) {
+                    ACTION_UPDATE_OVERLAY -> {
+                        overlayManager.hideOverlay()
+                        if (enabled) overlayManager.showOverlay()
+                        L.d(TAG, "收到 ACTION_UPDATE_OVERLAY，已重摆悬浮窗")
+                    }
+                    ACTION_OCR_MODELS_READY -> {
+                        // 模型刚下好：丢弃旧引擎，下次使用会重新加载
+                        if (::ocrTextCollector.isInitialized) ocrTextCollector.destroy()
+                        ocrTextCollector = OcrTextCollector(this@TranslateAccessibilityService)
+                        L.d(TAG, "收到 ACTION_OCR_MODELS_READY，OCR 引擎将重新加载")
+                    }
+                }
+            }
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(receiver, filter, RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(receiver, filter)
+        }
+        overlayUpdateReceiver = receiver
+    }
+
+    private fun unregisterOverlayUpdateReceiver() {
+        overlayUpdateReceiver?.let {
+            try { unregisterReceiver(it) } catch (_: Exception) {}
+        }
+        overlayUpdateReceiver = null
     }
 
     /**
@@ -93,6 +146,8 @@ class TranslateAccessibilityService : AccessibilityService() {
         if (!enabled) return
 
         val pkg = event.packageName ?: return
+        // 不翻译本应用自己的界面（设置页、日志页等）
+        if (pkg == packageName) return
         L.d(TAG, "Event: ${event.eventType} pkg=$pkg")
 
         // 防抖：600毫秒内的重复事件会被忽略
@@ -159,6 +214,10 @@ class TranslateAccessibilityService : AccessibilityService() {
             }
         } catch (e: Exception) {
             L.e(TAG, "processScreenContent error", e)
+            withContext(Dispatchers.Main) {
+                overlayManager.setLoading(false)
+                toast("屏幕内容读取失败：${e.message?.take(40) ?: "未知错误"}")
+            }
         }
     }
 
@@ -167,43 +226,128 @@ class TranslateAccessibilityService : AccessibilityService() {
     }
 
     /**
+     * 确保 OCR 引擎已加载、截屏权限已就绪。失败时停止转圈并给出明确提示。
+     * @return true 表示可以继续截屏识别
+     */
+    private suspend fun prepareOcr(): Boolean {
+        val modelsReady = ocrTextCollector.isModelsReady()
+        if (!modelsReady) {
+            withContext(Dispatchers.Main) {
+                toast("首次使用需要下载 OCR 模型（约 130MB），请保持网络畅通…")
+            }
+        }
+        if (!ocrTextCollector.initIfNeeded()) {
+            L.w(TAG, "OCR 模型未就绪")
+            withContext(Dispatchers.Main) {
+                overlayManager.setLoading(false)
+                toast("OCR 模型准备失败，请到设置 → 模型下载管理 检查")
+            }
+            return false
+        }
+        ScreenCapture.pendingIntent?.let {
+            ocrTextCollector.initScreenCapture(it)
+            ScreenCapture.pendingIntent = null
+        }
+        if (!ocrTextCollector.isScreenCaptureReady()) {
+            L.w(TAG, "截屏权限未获取")
+            withContext(Dispatchers.Main) {
+                overlayManager.setLoading(false)
+                toast("尚未授予截屏权限，请到主页点击「开启截屏权限」")
+            }
+            return false
+        }
+        return true
+    }
+
+    private fun toast(msg: String) {
+        android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_LONG).show()
+    }
+
+    /**
+     * 根据坐标点翻译单个段落
+     * 流程：截屏 → OCR → 匹配文本块 → 翻译该段 → 显示单个气泡
+     */
+    private suspend fun processOcrAtPoint(x: Int, y: Int) {
+        try {
+            withContext(Dispatchers.Main) { overlayManager.setLoading(true) }
+            if (!prepareOcr()) return
+            L.d(TAG, "段落翻译: 坐标 ($x, $y)")
+            when (val result = ocrTextCollector.collectText()) {
+                is CollectResult.NoFrame -> {
+                    L.w(TAG, "无缓存帧")
+                    withContext(Dispatchers.Main) {
+                        overlayManager.setLoading(false)
+                        toast("尚未捕获到屏幕画面，请先上下滑动屏幕再试")
+                    }
+                    return
+                }
+                is CollectResult.NoText -> {
+                    L.d(TAG, "OCR 未采集到文本: ${result.reason}")
+                    withContext(Dispatchers.Main) {
+                        overlayManager.setLoading(false)
+                        toast("未识别到文字")
+                    }
+                    return
+                }
+                is CollectResult.Success -> {
+                    val node = TextSorter.findTextBlockAtPoint(x, y, result.nodes)
+                    if (node == null) {
+                        L.d(TAG, "段落翻译: 未找到匹配的文本块")
+                        withContext(Dispatchers.Main) {
+                            overlayManager.setLoading(false)
+                            toast("未找到可翻译的文本")
+                        }
+                        return
+                    }
+                    L.d(TAG, "段落翻译: 匹配到 \"${node.text.take(30)}\"")
+                    withContext(Dispatchers.Main) {
+                        overlayManager.showOverlay()
+                    }
+                    try {
+                        val translationResult = translationManager.translateOne(node)
+                        withContext(Dispatchers.Main) {
+                            overlayManager.showTranslationBubbles(listOf(translationResult))
+                        }
+                        L.d(TAG, "段落翻译完成: \"${translationResult.translated.take(30)}\"")
+                    } finally {
+                        withContext(Dispatchers.Main) {
+                            overlayManager.setLoading(false)
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            L.e(TAG, "段落翻译失败", e)
+            withContext(Dispatchers.Main) {
+                overlayManager.setLoading(false)
+                toast("段落翻译失败：${e.message?.take(40) ?: "未知错误"}")
+            }
+        }
+    }
+
+    /**
      * 处理 OCR 屏幕内容
      * 通过 MediaProjection 截屏 + PP-OCR 识别，解决无障碍模式采集不到文本的问题
      */
     private suspend fun processOcrContent() {
         try {
-            if (!ocrTextCollector.initIfNeeded()) {
-                L.w(TAG, "OCR 模型未就绪")
-                withContext(Dispatchers.Main) { overlayManager.setLoading(false) }
-                return
-            }
-            // 检查是否有待处理的截屏授权
-            ScreenCapture.pendingIntent?.let {
-                ocrTextCollector.initScreenCapture(it)
-                ScreenCapture.pendingIntent = null
-            }
-            if (!ocrTextCollector.isScreenCaptureReady()) {
-                L.w(TAG, "截屏权限未获取")
-                withContext(Dispatchers.Main) { overlayManager.setLoading(false) }
-                return
-            }
+            if (!prepareOcr()) return
             L.d(TAG, "开始 OCR 采集")
             when (val result = ocrTextCollector.collectText()) {
                 is CollectResult.NoFrame -> {
                     L.w(TAG, "无缓存帧，轮询超时，提示用户切换屏幕")
                     withContext(Dispatchers.Main) {
                         overlayManager.setLoading(false)
-                        android.widget.Toast.makeText(
-                            this@TranslateAccessibilityService,
-                            "尚未捕获到屏幕画面，请先上下滑动屏幕再试",
-                            android.widget.Toast.LENGTH_LONG
-                        ).show()
+                        toast("尚未捕获到屏幕画面，请先上下滑动屏幕再试")
                     }
                     return
                 }
                 is CollectResult.NoText -> {
                     L.d(TAG, "OCR 未采集到文本: ${result.reason}")
-                    withContext(Dispatchers.Main) { overlayManager.setLoading(false) }
+                    withContext(Dispatchers.Main) {
+                        overlayManager.setLoading(false)
+                        toast("未识别到文字")
+                    }
                     return
                 }
                 is CollectResult.Success -> {
@@ -227,15 +371,33 @@ class TranslateAccessibilityService : AccessibilityService() {
             }
         } catch (e: Exception) {
             L.e(TAG, "OCR 处理失败", e)
-            withContext(Dispatchers.Main) { overlayManager.setLoading(false) }
+            withContext(Dispatchers.Main) {
+                overlayManager.setLoading(false)
+                toast("OCR 识别失败：${e.message?.take(40) ?: "未知错误"}")
+            }
         }
     }
 
     override fun onDestroy() {
         scope.cancel()
+        unregisterOverlayUpdateReceiver()
         overlayManager.hideOverlay()
         ocrTextCollector.destroy()
         super.onDestroy()
+    }
+
+    /**
+     * 仅把服务提升到前台（带 MEDIA_PROJECTION 类型），用于获取截屏授权，
+     * 不改变实时翻译的开关状态和悬浮窗。
+     */
+    private fun ensureForegroundForCapture() {
+        val notification = buildNotification()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            startForeground(NOTIFICATION_ID, notification,
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
     }
 
     /**
@@ -264,6 +426,8 @@ class TranslateAccessibilityService : AccessibilityService() {
     fun stopTranslating() {
         enabled = false
         translationManager.saveEnabledState(false)
+        // 重置去重哈希，重新启动后同一屏内容也要能再次翻译
+        lastProcessedHash = 0
         overlayManager.hideOverlay()
         stopForeground(STOP_FOREGROUND_REMOVE)
         KeepAliveService.updateStatus(this, false)
@@ -275,9 +439,9 @@ class TranslateAccessibilityService : AccessibilityService() {
             ACTION_START -> startTranslating()
             ACTION_STOP -> stopTranslating()
             ACTION_INIT_OCR -> {
-                if (!enabled) {
-                    startTranslating()
-                }
+                // Android 14+ 要求先以 MEDIA_PROJECTION 类型进入前台，才能创建
+                // MediaProjection。这里只提升前台类型，不改变实时翻译的开/关状态。
+                ensureForegroundForCapture()
                 val pending = ScreenCapture.pendingIntent
                 if (::ocrTextCollector.isInitialized && pending != null) {
                     ocrTextCollector.initScreenCapture(pending)
@@ -339,5 +503,7 @@ class TranslateAccessibilityService : AccessibilityService() {
         const val ACTION_START = "com.screentranslate.ACTION_START"
         const val ACTION_STOP = "com.screentranslate.ACTION_STOP"
         const val ACTION_INIT_OCR = "com.screentranslate.ACTION_INIT_OCR"
+        const val ACTION_UPDATE_OVERLAY = "com.screentranslate.ACTION_UPDATE_OVERLAY"
+        const val ACTION_OCR_MODELS_READY = "com.screentranslate.ACTION_OCR_MODELS_READY"
     }
 }

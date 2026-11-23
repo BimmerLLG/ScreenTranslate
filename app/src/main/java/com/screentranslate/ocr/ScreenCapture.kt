@@ -33,6 +33,11 @@ class ScreenCapture(private val context: Context) {
     companion object {
         const val REQUEST_CODE = 10001
         var pendingIntent: Intent? = null
+
+        /** 用户是否已授予截屏权限（授权在重启前一直有效，供 UI 展示状态用）。 */
+        @Volatile
+        var hasPermission = false
+            private set
     }
 
     fun initFromActivityResult(data: Intent?) {
@@ -40,12 +45,14 @@ class ScreenCapture(private val context: Context) {
                 as android.media.projection.MediaProjectionManager
         if (data != null) {
             mediaProjection = manager.getMediaProjection(Activity.RESULT_OK, data)
+            if (mediaProjection != null) hasPermission = true
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                 mediaProjection?.registerCallback(
                     object : MediaProjection.Callback() {
                         override fun onStop() {
                             L.w("ScreenCapture", "MediaProjection.onStop: 系统停止了屏幕投影")
                             virtualDisplayReady = false
+                            hasPermission = false
                             virtualDisplay?.release()
                             virtualDisplay = null
                         }

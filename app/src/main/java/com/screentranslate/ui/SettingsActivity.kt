@@ -33,10 +33,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.screentranslate.logger.L
 import com.screentranslate.ocr.ModelManager
-import com.screentranslate.service.KeepAliveService
+import com.screentranslate.translate.BiliIndexTranslator
 import com.screentranslate.translate.TranslationManager
 import com.screentranslate.ui.theme.ScreenTranslateTheme
-import com.google.gson.Gson
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -181,6 +180,10 @@ private fun EngineSettingsPage(onBack: () -> Unit) {
     var batchMode by remember { mutableStateOf(prefs.getString("batch_mode", "batch") ?: "batch") }
     var batchMaxChars by remember { mutableIntStateOf(prefs.getInt("batch_max_chars", 2000).coerceIn(500, 3000)) }
     var enableZhRecognition by remember { mutableStateOf(prefs.getBoolean("enable_zh_recognition", false)) }
+    var detResolution by remember { mutableIntStateOf(prefs.getInt("det_resolution", 480).coerceIn(320, 736)) }
+    var biliModel by remember { mutableStateOf(prefs.getString("bili_model", BiliIndexTranslator.DEFAULT_MODEL) ?: BiliIndexTranslator.DEFAULT_MODEL) }
+    var biliEndpoint by remember { mutableStateOf(prefs.getString("bili_endpoint", BiliIndexTranslator.DEFAULT_ENDPOINT) ?: BiliIndexTranslator.DEFAULT_ENDPOINT) }
+    var biliModelExpanded by remember { mutableStateOf(false) }
     val effortOptions = listOf("low", "medium", "high")
 
     fun save() {
@@ -197,9 +200,33 @@ private fun EngineSettingsPage(onBack: () -> Unit) {
             putString("batch_mode", batchMode)
             putInt("batch_max_chars", batchMaxChars)
             putBoolean("enable_zh_recognition", enableZhRecognition)
+            putInt("det_resolution", detResolution)
+            putString("bili_model", biliModel)
+            putString("bili_endpoint", biliEndpoint)
             apply()
         }
         Toast.makeText(context, "已保存", Toast.LENGTH_SHORT).show()
+    }
+
+    fun saveSilent() {
+        prefs.edit().apply {
+            putString("ai_endpoint", endpoint)
+            putString("ai_api_key", apiKey)
+            putString("ai_model", model)
+            putString("source_lang", sourceLang)
+            putString("target_lang", targetLang)
+            putString("translation_mode", translationMode)
+            putString("custom_prompt", customPrompt)
+            putBoolean("thinking_enabled", thinkingEnabled)
+            putString("reasoning_effort", reasoningEffort)
+            putString("batch_mode", batchMode)
+            putInt("batch_max_chars", batchMaxChars)
+            putBoolean("enable_zh_recognition", enableZhRecognition)
+            putInt("det_resolution", detResolution)
+            putString("bili_model", biliModel)
+            putString("bili_endpoint", biliEndpoint)
+            apply()
+        }
     }
 
     Scaffold(
@@ -237,13 +264,48 @@ private fun EngineSettingsPage(onBack: () -> Unit) {
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 RadioButton(
+                    selected = translationMode == "bili",
+                    onClick = { translationMode = "bili" }
+                )
+                Text("B站 Index-Translate（免 API）", modifier = Modifier.padding(start = 4.dp))
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                RadioButton(
                     selected = translationMode == "google",
                     onClick = { translationMode = "google" }
                 )
-                Text("Google 离线翻译", modifier = Modifier.padding(start = 4.dp))
+                Text("Google 离线翻译（ML Kit）", modifier = Modifier.padding(start = 4.dp))
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                RadioButton(
+                    selected = translationMode == "google_web",
+                    onClick = { translationMode = "google_web" }
+                )
+                Text("Google 网页翻译（免 API）", modifier = Modifier.padding(start = 4.dp))
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                RadioButton(
+                    selected = translationMode == "bing_web",
+                    onClick = { translationMode = "bing_web" }
+                )
+                Text("Bing 网页翻译（免 API）", modifier = Modifier.padding(start = 4.dp))
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                RadioButton(
+                    selected = translationMode == "baidu_web",
+                    onClick = { translationMode = "baidu_web" }
+                )
+                Text("百度翻译（免 API）", modifier = Modifier.padding(start = 4.dp))
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                RadioButton(
+                    selected = translationMode == "yandex_web",
+                    onClick = { translationMode = "yandex_web" }
+                )
+                Text("Yandex 翻译（免 API）", modifier = Modifier.padding(start = 4.dp))
             }
 
-            if (translationMode == "ai") {
+            if (translationMode == "ai" || translationMode == "bili") {
                 Spacer(Modifier.height(12.dp))
                 Text("翻译策略", style = MaterialTheme.typography.titleSmall)
                 Spacer(Modifier.height(4.dp))
@@ -309,51 +371,111 @@ private fun EngineSettingsPage(onBack: () -> Unit) {
                 Spacer(Modifier.height(4.dp))
             }
 
+            Spacer(Modifier.height(12.dp))
+            Text("检测分辨率: $detResolution", style = MaterialTheme.typography.bodyLarge)
+            Slider(
+                value = detResolution.toFloat(),
+                onValueChange = { detResolution = it.toInt() },
+                valueRange = 320f..736f,
+                steps = 12
+            )
+            Text(
+                "降低可加速检测，升高可提高检测精度（推荐 480）",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
             Spacer(Modifier.height(16.dp))
             HorizontalDivider()
             Spacer(Modifier.height(16.dp))
 
-            OutlinedTextField(
-                value = endpoint,
-                onValueChange = { endpoint = it },
-                label = { Text("API Endpoint") },
-                supportingText = { Text("支持 OpenAI 兼容接口") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
+            if (translationMode == "ai") {
+                OutlinedTextField(
+                    value = endpoint,
+                    onValueChange = { endpoint = it },
+                    label = { Text("API Endpoint") },
+                    supportingText = { Text("支持 OpenAI 兼容接口") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
 
-            Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(12.dp))
 
-            OutlinedTextField(
-                value = apiKey,
-                onValueChange = { apiKey = it },
-                label = { Text("API Key") },
-                singleLine = true,
-                visualTransformation = if (showApiKey) VisualTransformation.None
-                    else PasswordVisualTransformation(),
-                trailingIcon = {
-                    IconButton(onClick = { showApiKey = !showApiKey }) {
-                        Icon(
-                            if (showApiKey) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                            contentDescription = if (showApiKey) "隐藏" else "显示"
-                        )
+                OutlinedTextField(
+                    value = apiKey,
+                    onValueChange = { apiKey = it },
+                    label = { Text("API Key") },
+                    singleLine = true,
+                    visualTransformation = if (showApiKey) VisualTransformation.None
+                        else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        IconButton(onClick = { showApiKey = !showApiKey }) {
+                            Icon(
+                                if (showApiKey) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                contentDescription = if (showApiKey) "隐藏" else "显示"
+                            )
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(Modifier.height(12.dp))
+
+                OutlinedTextField(
+                    value = model,
+                    onValueChange = { model = it },
+                    label = { Text("模型名称") },
+                    supportingText = { Text("gpt-4o-mini / deepseek-chat / deepseek-v4-flash") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(Modifier.height(12.dp))
+            }
+
+            if (translationMode == "bili") {
+                ExposedDropdownMenuBox(
+                    expanded = biliModelExpanded,
+                    onExpandedChange = { biliModelExpanded = it }
+                ) {
+                    OutlinedTextField(
+                        value = biliModel,
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("B站翻译模型") },
+                        supportingText = { Text("免费，无需 API Key；35B 效果最好，9B/2B 更快") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = biliModelExpanded) },
+                        modifier = Modifier.fillMaxWidth().menuAnchor()
+                    )
+                    ExposedDropdownMenu(
+                        expanded = biliModelExpanded,
+                        onDismissRequest = { biliModelExpanded = false }
+                    ) {
+                        BiliIndexTranslator.MODELS.forEach { option ->
+                            DropdownMenuItem(
+                                text = { Text(option) },
+                                onClick = {
+                                    biliModel = option
+                                    biliModelExpanded = false
+                                }
+                            )
+                        }
                     }
-                },
-                modifier = Modifier.fillMaxWidth()
-            )
+                }
 
-            Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(12.dp))
 
-            OutlinedTextField(
-                value = model,
-                onValueChange = { model = it },
-                label = { Text("模型名称") },
-                supportingText = { Text("gpt-4o-mini / deepseek-chat / deepseek-v4-flash") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
+                OutlinedTextField(
+                    value = biliEndpoint,
+                    onValueChange = { biliEndpoint = it },
+                    label = { Text("B站接口地址") },
+                    supportingText = { Text("默认官方地址，一般无需修改") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
 
-            Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(12.dp))
+            }
 
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedTextField(
@@ -462,17 +584,35 @@ private fun EngineSettingsPage(onBack: () -> Unit) {
                 }
                 OutlinedButton(
                     onClick = {
-                        save()
+                        saveSilent()
                         translationManager.loadAiConfig()
+                        translationManager.loadBiliConfig()
                         testResult = "翻译中..."
                         scope.launch {
+                            val start = System.currentTimeMillis()
                             val result = withContext(Dispatchers.Default) {
                                 translationManager.testTranslation(
                                     "Hello, welcome to Screen Translate!",
                                     translationMode
                                 )
                             }
-                            testResult = "原文: Hello, welcome to Screen Translate!\n译文: $result"
+                            val elapsed = System.currentTimeMillis() - start
+                            val modeLabel = when (translationMode) {
+                                "ai" -> "AI (${model})"
+                                "bili" -> "B站 Index-Translate (${biliModel})"
+                                "google" -> "Google 离线 (ML Kit)"
+                                "google_web" -> "Google Web"
+                                "bing_web" -> "Bing Web"
+                                "baidu_web" -> "百度翻译"
+                                "yandex_web" -> "Yandex 翻译"
+                                else -> translationMode
+                            }
+                            testResult = "引擎: $modeLabel (${elapsed}ms)\n原文: Hello, welcome to Screen Translate!\n译文: $result"
+                            if (result.startsWith("错误") || result.startsWith("[翻译失败]")) {
+                                Toast.makeText(context, "测试失败：$result", Toast.LENGTH_LONG).show()
+                            } else {
+                                Toast.makeText(context, "测试成功（${elapsed}ms）", Toast.LENGTH_SHORT).show()
+                            }
                         }
                     },
                     modifier = Modifier.weight(1f)
@@ -687,6 +827,8 @@ private fun FloatSettingsPage(onBack: () -> Unit) {
     var indicatorDraggable by remember { mutableStateOf(prefs.getBoolean("indicator_draggable", true)) }
     var indicatorShape by remember { mutableStateOf(prefs.getString("indicator_shape", "circle") ?: "circle") }
     var indicatorBgColor by remember { mutableStateOf(prefs.getString("indicator_bg_color", "#2196F3") ?: "#2196F3") }
+    var enableParagraphTranslate by remember { mutableStateOf(prefs.getBoolean("enable_paragraph_translate", true)) }
+    var paragraphSize by remember { mutableIntStateOf(prefs.getInt("paragraph_indicator_size", 24).coerceIn(16, 36)) }
 
     val colorOptions = listOf(
         "#2196F3" to "蓝", "#4CAF50" to "绿", "#FF9800" to "橙",
@@ -700,18 +842,23 @@ private fun FloatSettingsPage(onBack: () -> Unit) {
             putBoolean("indicator_draggable", indicatorDraggable)
             putString("indicator_shape", indicatorShape)
             putString("indicator_bg_color", indicatorBgColor)
+            putBoolean("enable_paragraph_translate", enableParagraphTranslate)
+            putInt("paragraph_indicator_size", paragraphSize)
             apply()
         }
     }
 
     fun resetPosition() {
         prefs.edit().putInt("indicator_pos_x", -1).putInt("indicator_pos_y", -1).apply()
-        // 触发展示更新
+        // 通知无障碍服务重摆悬浮窗，让新位置立刻生效
         try {
-            val intent = android.content.Intent("com.screentranslate.ACTION_UPDATE_OVERLAY")
+            val intent = android.content.Intent(
+                com.screentranslate.service.TranslateAccessibilityService.ACTION_UPDATE_OVERLAY
+            )
+            intent.setPackage(context.packageName)
             context.sendBroadcast(intent)
         } catch (_: Exception) {}
-        android.widget.Toast.makeText(context, "位置已重置，重新打开悬浮窗生效", android.widget.Toast.LENGTH_SHORT).show()
+        Toast.makeText(context, "位置已重置", Toast.LENGTH_SHORT).show()
     }
 
     Scaffold(
@@ -786,7 +933,7 @@ private fun FloatSettingsPage(onBack: () -> Unit) {
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                colorOptions.forEach { (hex, name) ->
+                colorOptions.forEach { (hex, _) ->
                     val selected = indicatorBgColor == hex
                     Box(
                         modifier = Modifier
@@ -839,6 +986,46 @@ private fun FloatSettingsPage(onBack: () -> Unit) {
             }
 
             Spacer(Modifier.height(16.dp))
+            HorizontalDivider()
+            Spacer(Modifier.height(16.dp))
+
+            Text("段落翻译", style = MaterialTheme.typography.titleSmall)
+            Spacer(Modifier.height(8.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("启用段落翻译", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        "拖动悬浮窗时出现"+"号，对准段落松手翻译",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = enableParagraphTranslate,
+                    onCheckedChange = { enableParagraphTranslate = it; save() }
+                )
+            }
+
+            if (enableParagraphTranslate) {
+                Spacer(Modifier.height(12.dp))
+                Text("+ 号大小: ${paragraphSize}dp", style = MaterialTheme.typography.bodyMedium)
+                Slider(
+                    value = paragraphSize.toFloat(),
+                    onValueChange = { paragraphSize = it.toInt() },
+                    onValueChangeFinished = { save() },
+                    valueRange = 16f..36f,
+                    steps = 9
+                )
+
+                Spacer(Modifier.height(4.dp))
+                Text("自动贴边时，左贴边加号在左，右贴边加号在右", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+
+            Spacer(Modifier.height(16.dp))
 
             // 重置位置
             OutlinedButton(
@@ -860,9 +1047,13 @@ private fun FloatSettingsPage(onBack: () -> Unit) {
                     Spacer(Modifier.height(8.dp))
                     HorizontalDivider()
                     Spacer(Modifier.height(8.dp))
-                    Text("松手自动贴边吸附", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("拖动：移动悬浮窗位置", style = MaterialTheme.typography.bodyMedium)
+                    Spacer(Modifier.height(8.dp))
+                    HorizontalDivider()
+                    Spacer(Modifier.height(8.dp))
+                    Text("拖动松手：翻译"+"号对准的段落（单个气泡）", style = MaterialTheme.typography.bodyMedium)
                     Spacer(Modifier.height(4.dp))
-                    Text("贴边条形更宽，适合放在屏幕边缘", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("贴边条形更宽，适合放在屏幕边缘", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }
@@ -1086,6 +1277,20 @@ private fun ModelDownloadPage(onBack: () -> Unit) {
                 downloading = false
                 speedText = ""
                 refreshStatus()
+                val allReady = modelManager.allModelsReady()
+                if (allReady) {
+                    Toast.makeText(context, "OCR 模型已全部就绪", Toast.LENGTH_SHORT).show()
+                    // 模型就绪后通知正在运行的服务重载 OCR 引擎
+                    try {
+                        val intent = android.content.Intent(
+                            com.screentranslate.service.TranslateAccessibilityService.ACTION_OCR_MODELS_READY
+                        )
+                        intent.setPackage(context.packageName)
+                        context.sendBroadcast(intent)
+                    } catch (_: Exception) {}
+                } else {
+                    Toast.makeText(context, "部分模型下载失败，请检查网络后重试", Toast.LENGTH_LONG).show()
+                }
             }
         },
         modifier = Modifier.fillMaxWidth(),
@@ -1229,7 +1434,7 @@ private fun ColorPickerRow(selectedHex: String, onColorSelected: (String) -> Uni
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         modifier = Modifier.horizontalScroll(rememberScrollState())
     ) {
-        presetColors.forEach { (hex, name) ->
+        presetColors.forEach { (hex, _) ->
             val isSelected = hex == selectedHex
             val color = remember(hex) { Color(android.graphics.Color.parseColor(hex)) }
             Box(

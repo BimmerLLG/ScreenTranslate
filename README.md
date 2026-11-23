@@ -8,6 +8,7 @@
 - **双翻译引擎**
   - **AI 翻译** — 兼容 OpenAI API 格式，支持 GPT / DeepSeek / Claude 等任意大模型，可自定义 Prompt
   - **Google 离线翻译** — 基于 ML Kit，免费离线，无需 API Key，支持 12 种语言
+- **免费在线引擎** — Google / Bing / 百度 / Yandex 网页翻译，以及**哔哩哔哩 Index-Translate**，均无需 API Key
 - **智能文本合并** — 按屏幕坐标排序合并相邻文本块，减少 API 请求，保留上下文
 - **增量翻译** — 200 条 LRU 缓存 + 内容哈希去重，只翻译变化部分
 - **悬浮窗气泡** — 译文气泡浮动在原文本附近，支持自定义字体/颜色/圆角/透明度/阴影/最大行数
@@ -89,6 +90,16 @@ API Key: sk-xxxxxx
 
 无需配置，首次使用特定语言时会自动下载语言包（推荐 Wi-Fi 环境）。
 
+### 哔哩哔哩 Index-Translate
+
+设置里选择「B站 Index-Translate（免 API）」即可，无需填 Endpoint 或 Key。可选模型：
+
+- `Index-Translate-35B-A3B`（推荐，质量最好）
+- `Index-Translate-9B`
+- `Index-Translate-2B`（最快）
+
+代理内置了 B 站接口要求的 `enable_thinking=false` 参数（否则模型会输出思维链而非译文），并以流式方式请求以避开免费网关的超时限制。
+
 支持语言：中文、英语、日语、韩语、法语、德语、俄语、西班牙语、意大利语、葡萄牙语、泰语、越南语、阿拉伯语
 
 ## 项目结构
@@ -103,6 +114,7 @@ app/src/main/java/com/screentranslate/
 ├── translate/                      # 翻译引擎
 │   ├── Translator.kt               # 翻译接口
 │   ├── AiTranslator.kt             # AI API 翻译（OpenAI 兼容）
+│   ├── BiliIndexTranslator.kt      # 哔哩哔哩 Index-Translate 免费翻译
 │   ├── GoogleTranslator.kt         # ML Kit 离线翻译
 │   └── TranslationManager.kt       # 统筹调度 & LRU 缓存
 ├── overlay/

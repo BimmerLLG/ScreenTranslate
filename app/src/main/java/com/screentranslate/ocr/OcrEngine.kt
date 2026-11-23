@@ -30,6 +30,8 @@ class OcrEngine {
     private var koStd = floatArrayOf(0.5f, 0.5f, 0.5f)
     private var zhMean = floatArrayOf(0.5f, 0.5f, 0.5f)
     private var zhStd = floatArrayOf(0.5f, 0.5f, 0.5f)
+    private var detShapeLogged = false
+    var detResolution = 480
 
     data class OcrResult(val text: String, val bounds: Rect, val confidence: Float, val lang: String)
 
@@ -48,6 +50,12 @@ class OcrEngine {
         return try {
             env = OrtEnvironment.getEnvironment()
             val opts = OrtSession.SessionOptions()
+            try {
+                opts.addNnapi()
+                L.d("OcrEngine", "已启用 NNAPI 加速")
+            } catch (_: Exception) {
+                L.d("OcrEngine", "NNAPI 不可用，使用 CPU")
+            }
             detSession = env?.createSession(detModel.absolutePath, opts)
             enRecSession = env?.createSession(enRecModel.absolutePath, opts)
             koRecSession = env?.createSession(koRecModel.absolutePath, opts)
@@ -79,8 +87,21 @@ class OcrEngine {
 
         logBitmapSample(bitmap, "detect输入")
 
-        val targetH = 640
-        val targetW = 640
+        // 运行时打印模型期望的输入形状，首次检测时只打印一次
+        if (!detShapeLogged) {
+            try {
+                val inputInfo = session.inputInfo[getInputName(session)]
+                val shape = inputInfo?.info?.let {
+                    if (it is ai.onnxruntime.TensorInfo) it.shape?.joinToString("x") else "?"
+                } ?: "?"
+                L.d("OcrEngine", "detect模型期望形状: $shape")
+            } catch (_: Exception) {}
+            detShapeLogged = true
+        }
+
+        val detRes = detResolution.coerceIn(320, 736)
+        val targetH = detRes
+        val targetW = detRes
         val (input, scaleX, scaleY) = preprocessDet(bitmap, targetH, targetW)
 
         val inputShape = longArrayOf(1, 3, targetH.toLong(), targetW.toLong())
@@ -125,7 +146,6 @@ class OcrEngine {
             if (it is ai.onnxruntime.TensorInfo) it.shape?.joinToString("x") else "?"
         } ?: "?"
         L.d("OcrEngine", "识别[$lang]: 输入=\"$inputName\" 期望形状=[$expectedShape] 输出=[$outputNames] boxes=${boxes.size}")
-        val firstBox = boxes.firstOrNull()
         var firstError: String? = null
 
         for ((idx, box) in boxes.withIndex()) {
@@ -135,7 +155,7 @@ class OcrEngine {
                     (box.left - pad).coerceAtLeast(0), (box.top - pad).coerceAtLeast(0),
                     (box.right + pad).coerceAtMost(bitmap.width), (box.bottom + pad).coerceAtMost(bitmap.height)
                 )
-                if (safeRect.width() < 4 || safeRect.height() < 4) {
+                if (safeRect.width() < 16 || safeRect.height() < 12) {
                     L.d("OcrEngine", "跳过box[$idx]: 尺寸太小 ${safeRect.width()}x${safeRect.height()}")
                     continue
                 }
@@ -188,6 +208,7 @@ class OcrEngine {
         }
 
         val elapsed = System.currentTimeMillis() - start
+        if (firstError != null) L.w("OcrEngine", "识别[$lang] 首次错误: $firstError")
         L.d("OcrEngine", "识别完成 ($lang): ${results.size} 个, ${elapsed}ms")
         return results
     }
@@ -350,9 +371,9 @@ class OcrEngine {
                 (rect.right * scaleX).toInt(),
                 (rect.bottom * scaleY).toInt()
             )
-        }.filter { it.width() > 20 && it.height() > 8 }
+        }.filter { it.width() > 30 && it.height() > 12 && it.width() * it.height() > 600 }
 
-        L.d("OcrEngine", "postprocessDet: 尺寸过滤(w>20 && h>8)后=${result.size}个")
+        L.d("OcrEngine", "postprocessDet: 尺寸过滤(w>30 && h>12)后=${result.size}个")
         return result
     }
 

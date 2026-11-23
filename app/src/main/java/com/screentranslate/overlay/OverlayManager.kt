@@ -3,6 +3,7 @@ package com.screentranslate.overlay
 import android.content.Context
 import android.graphics.PixelFormat
 import android.graphics.Rect
+import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.VibrationEffect
@@ -33,13 +34,17 @@ class OverlayManager(private val context: Context) {
     private var overlayView: View? = null
     private var indicatorView: View? = null
     private var indicatorTextView: TextView? = null
+    private var paragraphIndicator: TextView? = null
+    private var paragraphIndicatorParams: WindowManager.LayoutParams? = null
     private var layoutParams: WindowManager.LayoutParams? = null
     private var isDragging = false
     private var hasMoved = false
     private var dismissView: View? = null
     private var isLoading = false
+    private var plusOnLeft = false
 
     var onRequestTranslate: (() -> Unit)? = null
+    var onParagraphTranslate: ((x: Int, y: Int) -> Unit)? = null
 
     fun showOverlay() {
         if (overlayView != null) {
@@ -93,10 +98,17 @@ class OverlayManager(private val context: Context) {
             )
         } catch (_: Exception) { 0xFF2196F3.toInt() }
 
+        val enableParagraph = prefs.getBoolean("enable_paragraph_translate", true)
+        val paragraphSizeDp = prefs.getInt("paragraph_indicator_size", 24).coerceIn(16, 36)
+        val paragraphSize = (paragraphSizeDp * density).toInt()
+
         val isPill = shape == "pill"
         val viewW = if (isPill) (sizeDp * 3.5f * density).toInt() else size
         val viewH = size
         val textSp = (sizeDp / 3.5f).coerceIn(10f, 24f)
+        val plusMargin = (12 * density).toInt()
+        val windowW = viewW + paragraphSize + plusMargin * 2
+        val windowH = viewH + paragraphSize + plusMargin * 2
 
         val container = FrameLayout(context).apply {
             setPadding(0, 0, 0, 0)
@@ -121,80 +133,128 @@ class OverlayManager(private val context: Context) {
             elevation = 8f
             alpha = opacity
             layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT
-            )
+                viewW, viewH,
+                Gravity.TOP or Gravity.START
+            ).apply {
+                leftMargin = paragraphSize + plusMargin
+                topMargin = paragraphSize + plusMargin
+            }
             indicatorTextView = this
 
             val gestureDetector = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
-                private var totalDrag = 0f
-
-                override fun onDown(e: MotionEvent): Boolean {
-                    isDragging = false
-                    hasMoved = false
-                    totalDrag = 0f
-                    return true
-                }
+                override fun onDown(e: MotionEvent): Boolean = true
 
                 override fun onLongPress(e: MotionEvent) {
-                    isDragging = true
-                    vibrate()
-                    setLoading(true)
-                    onRequestTranslate?.invoke()
-                    L.d("Overlay", "长按触发: 全屏翻译")
-                }
-
-                override fun onScroll(e1: MotionEvent?, e2: MotionEvent, distanceX: Float, distanceY: Float): Boolean {
-                    if (!draggable) return false
-                    totalDrag += kotlin.math.abs(distanceX) + kotlin.math.abs(distanceY)
-                    if (totalDrag < 8 * density) return true
-                    hasMoved = true
-                    isDragging = true
-                    val lp = indicatorView?.layoutParams as? WindowManager.LayoutParams ?: return false
-                    lp.gravity = Gravity.TOP or Gravity.START
-                    lp.x -= distanceX.toInt()
-                    lp.y -= distanceY.toInt()
-                    try {
-                        windowManager.updateViewLayout(indicatorView!!, lp)
-                    } catch (_: Exception) {}
-                    return true
+                    if (!hasMoved) {
+                        isDragging = true
+                        vibrate()
+                        setLoading(true)
+                        onRequestTranslate?.invoke()
+                        L.d("Overlay", "长按触发: 全屏翻译")
+                    }
                 }
             })
 
+            var initialRawX = 0f
+            var initialRawY = 0f
+            var initialViewX = 0
+            var initialViewY = 0
+            val screenW = context.resources.displayMetrics.widthPixels
+
             setOnTouchListener { _, event ->
                 gestureDetector.onTouchEvent(event)
-                if (event.action == MotionEvent.ACTION_UP || event.action == MotionEvent.ACTION_CANCEL) {
-                    if (hasMoved) {
+                when (event.action) {
+                    MotionEvent.ACTION_DOWN -> {
+                        isDragging = false
+                        hasMoved = false
+                        initialRawX = event.rawX
+                        initialRawY = event.rawY
                         val lp = indicatorView?.layoutParams as? WindowManager.LayoutParams
                         if (lp != null) {
-                            // 吸附边缘
-                            val centerX = lp.x + viewW / 2
-                            val snapX = if (centerX < screenW / 2) {
-                                (4 * density).toInt()
-                            } else {
-                                screenW - viewW - (4 * density).toInt()
-                            }
-                            lp.x = snapX
-                            try {
-                                windowManager.updateViewLayout(indicatorView!!, lp)
-                            } catch (_: Exception) {}
-                            prefs.edit()
-                                .putInt("indicator_pos_x", lp.x)
-                                .putInt("indicator_pos_y", lp.y)
-                                .apply()
-                            L.d("Overlay", "拖动结束: 位置已保存 (${lp.x}, ${lp.y})")
+                            initialViewX = lp.x
+                            initialViewY = lp.y
+                        }
+                        if (enableParagraph) {
+                            showParagraphIndicator()
                         }
                     }
-                    isDragging = false
-                    hasMoved = false
+                    MotionEvent.ACTION_MOVE -> {
+                        if (!draggable) return@setOnTouchListener true
+                        val dx = event.rawX - initialRawX
+                        val dy = event.rawY - initialRawY
+                        if (!hasMoved && (kotlin.math.abs(dx) > 8 * density || kotlin.math.abs(dy) > 8 * density)) {
+                            hasMoved = true
+                            isDragging = true
+                        }
+                        if (hasMoved) {
+                            val lp = indicatorView?.layoutParams as? WindowManager.LayoutParams
+                            if (lp != null) {
+                                lp.x = initialViewX + dx.toInt()
+                                lp.y = initialViewY + dy.toInt()
+                                try {
+                                    windowManager.updateViewLayout(indicatorView!!, lp)
+                                } catch (_: Exception) {}
+                                updateParagraphIndicatorPosition()
+                            }
+                        }
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        if (hasMoved && enableParagraph) {
+                            val center = getParagraphIndicatorCenter()
+                            if (center != null) {
+                                L.d("Overlay", "段落翻译: 松手坐标 (${center.x}, ${center.y})")
+                                onParagraphTranslate?.invoke(center.x, center.y)
+                            }
+                        }
+                        hideParagraphIndicator()
+                        if (hasMoved) {
+                            val lp = indicatorView?.layoutParams as? WindowManager.LayoutParams
+                            if (lp != null) {
+                                val indicatorScreenX = lp.x + paragraphSize + plusMargin + viewW / 2
+                                if (indicatorScreenX < screenW / 2) {
+                                    plusOnLeft = true
+                                    lp.x = (4 * density).toInt() - paragraphSize - plusMargin
+                                } else {
+                                    plusOnLeft = false
+                                    lp.x = screenW - (4 * density).toInt() - paragraphSize - plusMargin - viewW
+                                }
+                                try {
+                                    windowManager.updateViewLayout(indicatorView!!, lp)
+                                } catch (_: Exception) {}
+                                prefs.edit()
+                                    .putInt("indicator_pos_x", lp.x)
+                                    .putInt("indicator_pos_y", lp.y)
+                                    .apply()
+                                L.d("Overlay", "拖动结束: 位置已保存 (${lp.x}, ${lp.y})")
+                            }
+                        }
+                        isDragging = false
+                        hasMoved = false
+                    }
                 }
                 true
             }
         }
         container.addView(tv)
 
+        val plusTv = TextView(context).apply {
+            text = "+"
+            setTextColor(android.graphics.Color.WHITE)
+            setTextSize(android.util.TypedValue.COMPLEX_UNIT_DIP, paragraphSizeDp.toFloat())
+            gravity = Gravity.CENTER
+            typeface = Typeface.DEFAULT_BOLD
+            setShadowLayer(2f, 0f, 0f, android.graphics.Color.BLACK)
+            background = null
+            elevation = 10f
+            alpha = 0.95f
+            visibility = View.INVISIBLE
+            layoutParams = FrameLayout.LayoutParams(paragraphSize, paragraphSize, Gravity.TOP or Gravity.END)
+        }
+        container.addView(plusTv)
+        paragraphIndicator = plusTv
+
         val params = WindowManager.LayoutParams(
-            viewW, viewH,
+            windowW, windowH,
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
             else
@@ -214,20 +274,66 @@ class OverlayManager(private val context: Context) {
             params.y = savedY
             L.d("Overlay", "指示器使用保存位置: (${params.x}, ${params.y})")
         } else {
-            params.gravity = Gravity.CENTER_VERTICAL or Gravity.END
-            params.x = dpToPx(12)
+            params.gravity = Gravity.TOP or Gravity.START
+            params.x = screenW - viewW - dpToPx(12) - paragraphSize - plusMargin
+            params.y = (context.resources.displayMetrics.heightPixels - viewH) / 2 - paragraphSize - plusMargin
             L.d("Overlay", "指示器默认位置: 右侧中部")
         }
 
         try {
             windowManager.addView(container, params)
             indicatorView = container
+            val indicatorCenterX = params.x + paragraphSize + plusMargin + viewW / 2
+            plusOnLeft = indicatorCenterX < screenW / 2
+            updateParagraphIndicatorPosition()
         } catch (e: Exception) {
             L.e("Overlay", "Failed to show indicator", e)
         }
     }
 
+    private fun showParagraphIndicator() {
+        paragraphIndicator?.visibility = View.VISIBLE
+        updateParagraphIndicatorPosition()
+    }
+
+    private fun hideParagraphIndicator() {
+        paragraphIndicator?.visibility = View.INVISIBLE
+    }
+
+    private fun updateParagraphIndicatorPosition() {
+        val indicator = paragraphIndicator ?: return
+        val lp = indicator.layoutParams as FrameLayout.LayoutParams
+        lp.gravity = if (plusOnLeft) Gravity.TOP or Gravity.START else Gravity.TOP or Gravity.END
+        lp.leftMargin = 0
+        lp.rightMargin = 0
+        lp.topMargin = 0
+        lp.bottomMargin = 0
+        indicator.layoutParams = lp
+    }
+
+    private fun getParagraphIndicatorCenter(): android.graphics.Point? {
+        val container = indicatorView ?: return null
+        val containerLp = container.layoutParams as? WindowManager.LayoutParams ?: return null
+        val indicatorSize = paragraphIndicator?.layoutParams?.width ?: 0
+        val windowW = containerLp.width
+        return if (plusOnLeft) {
+            android.graphics.Point(
+                containerLp.x + indicatorSize / 2,
+                containerLp.y + indicatorSize / 2
+            )
+        } else {
+            android.graphics.Point(
+                containerLp.x + windowW - indicatorSize / 2,
+                containerLp.y + indicatorSize / 2
+            )
+        }
+    }
+
     private fun hideIndicator() {
+        // paragraphIndicator 是 indicatorView 容器的子 View，随容器一起移除即可，
+        // 单独 removeView 会抛异常。
+        paragraphIndicator = null
+        indicatorTextView = null
         indicatorView?.let {
             try {
                 windowManager.removeView(it)
@@ -250,17 +356,33 @@ class OverlayManager(private val context: Context) {
             L.w("Overlay", "overlayView is null, calling showOverlay()")
             showOverlay()
         }
-        L.d("Overlay", "显示 ${results.size} 个翻译气泡")
+
+        // 失败条目已在别处通过 Toast 提示，这里不再铺满"[翻译失败]"气泡
+        val visible = results.filterNot {
+            it.translated.startsWith("[翻译失败]") || it.translated.startsWith("[失败]")
+        }
+        if (visible.isEmpty()) {
+            L.d("Overlay", "无成功译文，跳过气泡显示（失败数=${results.size}）")
+            return
+        }
+        L.d("Overlay", "显示 ${visible.size} 个翻译气泡（失败已过滤 ${results.size - visible.size} 个）")
+
+        // 先铺"点击空白关闭"层，再画气泡，保证气泡在关闭层之上可读可点
+        showDismissLayer()
 
         val displayMetrics = context.resources.displayMetrics
         val screenWidth = displayMetrics.widthPixels
         val screenHeight = displayMetrics.heightPixels
 
-        for ((i, result) in results.withIndex()) {
+        val animate = prefs.getBoolean("mask_animation", true)
+        for ((i, result) in visible.withIndex()) {
             val bubble = createBubble(result.translated, result.bounds, screenWidth, screenHeight)
             activeBubbles["bubble_$i"] = bubble
+            if (animate) {
+                bubble.alpha = 0f
+                bubble.animate().alpha(1f).setDuration(160).start()
+            }
         }
-        showDismissLayer()
     }
 
     private fun showDismissLayer() {
@@ -308,7 +430,6 @@ class OverlayManager(private val context: Context) {
         screenWidth: Int,
         screenHeight: Int
     ): View {
-        val density = context.resources.displayMetrics.density
         val scaledDensity = context.resources.displayMetrics.scaledDensity
 
         val fontColor = prefs.getString("mask_font_color", "#FFFFFF") ?: "#FFFFFF"
@@ -317,6 +438,8 @@ class OverlayManager(private val context: Context) {
         val maxLinesStr = prefs.getString("mask_max_lines", "5") ?: "5"
         val maxLines = if (maxLinesStr == "0") Int.MAX_VALUE else maxLinesStr.toIntOrNull() ?: 5
         val useElevation = prefs.getBoolean("mask_elevation", true)
+        // 遮罩透明度（10-100%）作用于背景色的 alpha 通道
+        val opacityPct = prefs.getInt("mask_opacity", 80).coerceIn(10, 100)
 
         // 自适应字号：55% 原文高度 + 30% 用户偏好，范围 6-36sp
         val boxHeightSp = originalBounds.height() / scaledDensity
@@ -339,11 +462,14 @@ class OverlayManager(private val context: Context) {
             this.maxLines = maxLines
             val shape = GradientDrawable().apply {
                 setShape(GradientDrawable.RECTANGLE)
-                try {
-                    setColor(android.graphics.Color.parseColor(bgColorStr))
+                val base = try {
+                    android.graphics.Color.parseColor(bgColorStr)
                 } catch (_: Exception) {
-                    setColor(0xDD2196F3.toInt())
+                    0xDD2196F3.toInt()
                 }
+                // 用设置里的透明度替换原有 alpha 通道
+                val alpha = (opacityPct * 255 / 100)
+                setColor((base and 0x00FFFFFF) or (alpha shl 24))
                 this.cornerRadius = dpToPx(cornerRadius).toFloat()
             }
             background = shape

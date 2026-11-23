@@ -105,13 +105,18 @@ class ModelManager(private val context: Context) {
                     progress(downloaded, total, 0)
                     continue
                 }
+                // 不完整的分片文件一律删掉重下，避免把半截文件当完整模型加载。
+                val target = getModelFile(model)
+                if (target.exists()) {
+                    L.d("ModelManager", "删除不完整文件: ${model.fileName} (${target.length()}B)")
+                    target.delete()
+                }
                 try {
-                    L.d("ModelManager", "下载: ${model.fileName}")
-                    val fileStartBytes = getModelFile(model).length()
+                    L.d("ModelManager", "下载: ${model.fileName} (${model.expectedSize}B)")
                     var chunkBytes = 0L
                     var chunkStart = System.currentTimeMillis()
                     URL(model.url).openStream().use { input ->
-                        FileOutputStream(getModelFile(model), true).use { output ->
+                        FileOutputStream(target).use { output ->
                             val buf = ByteArray(32768)
                             var read: Int
                             while (input.read(buf).also { read = it } != -1) {
@@ -120,19 +125,24 @@ class ModelManager(private val context: Context) {
                                 val elapsed = System.currentTimeMillis() - chunkStart
                                 if (elapsed >= 200) {
                                     val speedBps = if (elapsed > 0) chunkBytes * 1000 / elapsed else 0
-                                    progress(downloaded + fileStartBytes + chunkBytes, total, speedBps)
+                                    progress(downloaded + chunkBytes, total, speedBps)
                                     chunkBytes = 0L
                                     chunkStart = System.currentTimeMillis()
                                 }
                             }
                         }
                     }
-                    downloaded += getModelFile(model).length()
-                    progress(downloaded, total, 0)
-                    L.d("ModelManager", "下载完成: ${model.fileName}")
+                    if (!isModelDownloaded(model)) {
+                        L.w("ModelManager", "下载不完整，丢弃: ${model.fileName} (${target.length()}/${model.expectedSize})")
+                        target.delete()
+                    } else {
+                        downloaded += target.length()
+                        progress(downloaded, total, 0)
+                        L.d("ModelManager", "下载完成: ${model.fileName}")
+                    }
                 } catch (e: Exception) {
                     L.e("ModelManager", "下载失败: ${model.fileName}", e)
-                    getModelFile(model).delete()
+                    target.delete()
                 }
             }
         }

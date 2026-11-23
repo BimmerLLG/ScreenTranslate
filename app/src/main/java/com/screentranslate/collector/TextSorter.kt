@@ -2,6 +2,7 @@ package com.screentranslate.collector
 
 import android.graphics.Rect
 import com.screentranslate.logger.L
+import kotlin.math.pow
 
 /**
  * TextSorter - 文本排序与合并工具
@@ -63,5 +64,47 @@ object TextSorter {
         result.add(current)
         L.d("TextSorter", "合并后: ${result.size} 个文本块")
         return result
+    }
+
+    /**
+     * 根据坐标点查找对应的文本块
+     * 用于段落翻译：用户将"+"对准目标段落，找到该段落对应的文本块
+     */
+    fun findTextBlockAtPoint(x: Int, y: Int, nodes: List<TextNode>): TextNode? {
+        if (nodes.isEmpty()) return null
+
+        // 1. 找包含该点的所有文本块
+        val candidates = nodes.filter { it.bounds.contains(x, y) }
+
+        return when {
+            candidates.isEmpty() -> {
+                // 无匹配 → 找最近的文本块
+                val nearest = nodes.minByOrNull { node ->
+                    val cx = node.bounds.centerX()
+                    val cy = node.bounds.centerY()
+                    kotlin.math.sqrt((cx - x).toDouble().pow(2) + (cy - y).toDouble().pow(2))
+                }
+                val dist = nearest?.let {
+                    kotlin.math.sqrt((it.bounds.centerX() - x).toDouble().pow(2) + (it.bounds.centerY() - y).toDouble().pow(2))
+                } ?: Double.MAX_VALUE
+                if (dist < 200.0) {
+                    L.d("TextSorter", "段落匹配: 无包含点，使用最近文本块 (距离=${"%.0f".format(dist)}px)")
+                    nearest
+                } else {
+                    L.d("TextSorter", "段落匹配: 无包含点且最近文本块太远 (距离=${"%.0f".format(dist)}px)")
+                    null
+                }
+            }
+            candidates.size == 1 -> {
+                L.d("TextSorter", "段落匹配: 找到1个文本块 \"${candidates[0].text.take(20)}\"")
+                candidates[0]
+            }
+            else -> {
+                // 多个重叠 → 选面积最小的（最精确的匹配）
+                val best = candidates.minByOrNull { it.bounds.width() * it.bounds.height() }
+                L.d("TextSorter", "段落匹配: 找到${candidates.size}个重叠块，选最小面积 \"${best?.text?.take(20)}\"")
+                best
+            }
+        }
     }
 }

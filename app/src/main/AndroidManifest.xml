@@ -12,7 +12,6 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
 
@@ -41,12 +40,6 @@
         <activity
             android:name=".ui.SettingsActivity"
             android:exported="false" />
-
-        <!-- 日志查看界面 Activity -->
-        <activity
-            android:name=".ui.LogActivity"
-            android:exported="false"
-            android:theme="@style/Theme.ScreenTranslate" />
 
         <!-- OCR 测试文本 Activity -->
         <activity

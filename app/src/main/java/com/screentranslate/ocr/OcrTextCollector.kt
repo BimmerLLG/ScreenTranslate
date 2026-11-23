@@ -74,6 +74,9 @@ class OcrTextCollector(context: Context) {
         return ready
     }
 
+    /** 模型文件是否都已下载完整（不触发下载）。 */
+    fun isModelsReady(): Boolean = modelManager.allModelsReady()
+
     suspend fun collectText(): CollectResult {
         L.d("OcrCollector", "collectText: 开始")
         val initOk = initialized
@@ -93,6 +96,7 @@ class OcrTextCollector(context: Context) {
         L.d("OcrCollector", "collectText: 截屏成功 ${bitmap.width}x${bitmap.height}")
 
         L.d("OcrCollector", "collectText: 开始文字检测")
+        ocrEngine.detResolution = prefs.getInt("det_resolution", 480)
         val boxes = ocrEngine.detect(bitmap)
         if (boxes.isEmpty()) {
             L.w("OcrCollector", "collectText: 未检测到文字区域")
