@@ -4,6 +4,10 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -19,32 +23,45 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # "tools" no longer exists in recent SDK repos and makes sdkmanager fail
+          packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
 
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
       - name: Build Debug APK
-        run: ./gradlew assembleDebug
+        run: ./gradlew assembleDebug --stacktrace
 
       - name: Rename APK
-        run: mv app/build/outputs/apk/debug/app-debug.apk ScreenTranslate-${{ github.ref_name }}.apk
+        run: mv app/build/outputs/apk/debug/app-debug.apk ScreenTranslate-${{ github.ref_name }}-debug.apk
+
+      - name: Upload APK as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ScreenTranslate-${{ github.ref_name }}-debug
+          path: ScreenTranslate-*.apk
 
       - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           name: ScreenTranslate ${{ github.ref_name }}
           body: |
-            ### 安装说明
-            1. 下载并安装 APK
-            2. 打开 App，按提示依次授予：
-               - 无障碍服务权限
-               - 悬浮窗权限
-               - 通知权限
-            3. 配置 AI 翻译 API（设置 → 翻译引擎 → AI 翻译）
-            4. 或使用 Google 离线翻译（无需配置）
+            ### Installation
 
-            > Debug APK 已使用 Android 调试证书签名，可直接安装。
-            > 如需 Release 签名 APK，请自行配置签名后运行 `./gradlew assembleRelease`。
+            1. Download and install the APK.
+            2. Open the app and grant, in order:
+               - Accessibility service permission
+               - Overlay permission
+               - Notification permission
+            3. Pick a translation engine (Settings -> Translation engine). The
+               Bilibili, web and Google offline engines need no configuration.
+            4. For OCR, tap "Enable screen capture" on the home screen.
+
+            > This is a debug APK signed with the Android debug certificate, so it
+            > installs directly. For a release-signed build, configure signing and
+            > run `./gradlew assembleRelease`.
           files: ScreenTranslate-*.apk
           draft: false
           prerelease: false

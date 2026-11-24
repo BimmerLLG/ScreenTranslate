@@ -1,160 +1,163 @@
-# ScreenTranslate — 实时屏幕翻译
+# ScreenTranslate — Real-time Screen Translation
 
-通过 Android 无障碍服务（AccessibilityService）实时提取屏幕文字，调用 AI API 或 Google ML Kit 离线翻译后，以悬浮气泡形式显示译文在原文本位置附近。同时支持 OCR 模式（PP-OCRv5 / ONNX Runtime），长按悬浮球即可触发全屏截图文字识别与翻译。
+An Android app that extracts on-screen text via the AccessibilityService and translates it with a choice of engines, drawing the result as overlay bubbles right on top of the original text. A long-press on the floating button switches to OCR mode (PP-OCRv5 / ONNX Runtime) to capture and translate text rendered as images.
 
-## 功能
+**English** | [简体中文](README.zh-CN.md)
 
-- **实时文本提取** — 利用无障碍服务遍历当前屏幕可见节点，提取文字及其屏幕位置
-- **双翻译引擎**
-  - **AI 翻译** — 兼容 OpenAI API 格式，支持 GPT / DeepSeek / Claude 等任意大模型，可自定义 Prompt
-  - **Google 离线翻译** — 基于 ML Kit，免费离线，无需 API Key，支持 12 种语言
-- **免费在线引擎** — Google / Bing / 百度 / Yandex 网页翻译，以及**哔哩哔哩 Index-Translate**，均无需 API Key
-- **智能文本合并** — 按屏幕坐标排序合并相邻文本块，减少 API 请求，保留上下文
-- **增量翻译** — 200 条 LRU 缓存 + 内容哈希去重，只翻译变化部分
-- **悬浮窗气泡** — 译文气泡浮动在原文本附近，支持自定义字体/颜色/圆角/透明度/阴影/最大行数
-- **OCR 模式** — 长按悬浮「译」按钮，通过 MediaProjection 截屏 + PP-OCRv5 识别，翻译屏幕任意图像文字
-- **自动语言检测** — AI 模式下自动识别源语言，也可手动指定
-- **思考模式** — 支持 DeepSeek 等模型的思考链显示
-- **常驻保活** — 前台服务防止进程被系统回收
+## Features
 
-## 截图
+- **Real-time text extraction** — walks the accessibility node tree and collects visible text with its on-screen bounds
+- **Seven translation engines**
+  - **AI translation** — any OpenAI-compatible endpoint (GPT / DeepSeek / Claude / Ollama / vLLM …), custom prompt, optional reasoning mode
+  - **Bilibili Index-Translate** — free public endpoint, no API key required, three model sizes
+  - **Google offline** — ML Kit on-device translation, works without network after the language pack is downloaded
+  - **Google / Bing / Baidu / Yandex web** — free unofficial endpoints, no API key required
+- **Smart text merging** — sorts blocks by position and merges adjacent lines into paragraphs, cutting request count while keeping context
+- **Incremental translation** — thread-safe bounded LRU cache (500 entries) plus content-hash deduplication, so only changed text is translated
+- **Overlay bubbles** — bubble placement follows the original text; configurable font, colors, corner radius, opacity, shadow and max lines
+- **OCR mode** — long-press the floating “译” button to capture the screen via MediaProjection and run PP-OCRv5
+- **Paragraph translation** — drag the floating button, aim the “+” at a paragraph and release to translate just that block
+- **Automatic language detection** — AI mode can detect the source language, or you can pin it
+- **Error feedback** — failures surface as readable toasts instead of silent no-ops
+- **Keep-alive** — a foreground service keeps the translation service alive in the background
 
-<!-- TODO: 添加截图 -->
-| 主界面 | 翻译效果 | 设置 |
-|:---:|:---:|:---:|
-| | | |
+## Download
 
-## 下载
+[![GitHub Release](https://img.shields.io/github/v/release/BimmerLLG/ScreenTranslate)](https://github.com/BimmerLLG/ScreenTranslate/releases)
 
-[![GitHub Release](https://img.shields.io/github/v/release/yourname/ScreenTranslate)](https://github.com/yourname/ScreenTranslate/releases)
+Grab the latest APK from [GitHub Releases](https://github.com/BimmerLLG/ScreenTranslate/releases).
 
-从 [GitHub Releases](https://github.com/yourname/ScreenTranslate/releases) 下载最新 APK。
+> Minimum Android 8.0 (API 26). Accessibility service and overlay permission are required on first run; screen-capture permission is required for OCR.
 
-> 首次使用需先授予无障碍服务 + 悬浮窗权限。
+## Tech stack
 
-## 技术栈
-
-| 类别 | 技术 |
+| Area | Technology |
 |---|---|
-| 语言 | Kotlin |
-| UI | Jetpack Compose + Material 3 |
-| 离线翻译 | Google ML Kit Translate |
-| AI 翻译 | OkHttp + Gson（OpenAI 兼容 API） |
+| Language | Kotlin |
+| UI | Jetpack Compose + Material 3 (dynamic color) |
+| Offline translation | Google ML Kit Translate |
+| Online translation | OkHttp + Gson (OpenAI-compatible and web endpoints) |
 | OCR | ONNX Runtime + PP-OCRv5 |
-| 异步 | Kotlin Coroutines |
-| 最低 SDK | Android 8.0 (API 26) |
-| 目标 SDK | Android 14 (API 34) |
+| Async | Kotlin Coroutines |
+| Min SDK | Android 8.0 (API 26) |
+| Target SDK | Android 14 (API 34) |
 
-## 快速开始
+## Getting started
 
-### 从源码构建
+### Build from source
 
-1. 克隆仓库
-2. 用 Android Studio 打开项目，等待 Gradle 同步完成
-3. 连接设备或启动模拟器，点击 Run
+```bash
+git clone https://github.com/BimmerLLG/ScreenTranslate.git
+cd ScreenTranslate
+./gradlew assembleDebug
+```
 
-### 使用
+Or open the project in Android Studio and run it from there.
 
-1. **配置 AI 翻译**（可选） — 打开设置，填入 API Endpoint、Key、模型名
-2. **授予权限**
-   - 无障碍服务：系统设置 → 无障碍 → 屏幕翻译
-   - 悬浮窗权限：允许在其他应用上层显示
-   - 通知权限：保活服务需要
-3. **启动服务** — 回到主界面点击「启动」
-4. **切换到任意 App** — 实时翻译效果立现
-5. **长按悬浮「译」按钮** — 触发 OCR 全屏翻译
+### Usage
 
-### OCR 模型
+1. **Pick an engine** — Settings → Translation engine. The Bilibili, web and offline engines need no configuration; AI mode needs an endpoint, key and model.
+2. **Grant permissions**
+   - Accessibility service: Settings → Accessibility → ScreenTranslate
+   - Overlay permission: allow drawing over other apps
+   - Notification permission: needed by the keep-alive service
+   - Screen capture: tap “Enable screen capture” on the home screen (OCR only)
+3. **Start** — tap Start on the home screen, then switch to any app
+4. **Translate** — text on screen is translated automatically
+5. **OCR** — long-press the floating “译” button to translate the whole screen, or drag and release on the “+” to translate a single paragraph
 
-- OCR 模型默认在首次使用时从 HuggingFace 自动下载（约 130MB）
-- 也可运行 `download_models.bat`（Windows）或 `download_models.sh`（Linux/macOS）预下载到 `app/src/main/assets/ocr_models/`
+### OCR models
 
-## 配置说明
+- Models download on first use (about 130 MB); progress and failures are reported in-app
+- You can pre-download them with `download_models.bat` (Windows) or `download_models.sh` (Linux/macOS) into `app/src/main/assets/ocr_models/`
 
-### AI 翻译
+## Configuration
 
-支持的 OpenAI 兼容 API，包括但不限于：
-- OpenAI GPT-4 / GPT-3.5
-- DeepSeek
-- Claude（需兼容代理）
-- 本地部署的 Ollama / vLLM / LM Studio 等
+### AI translation
 
-推荐配置：
+Works with any OpenAI-compatible API, including OpenAI GPT, DeepSeek, Claude (via a compatible proxy) and local servers such as Ollama / vLLM / LM Studio.
+
 ```
 Endpoint: https://api.openai.com/v1
-Model: gpt-4o-mini
-API Key: sk-xxxxxx
+Model:    gpt-4o-mini
+API Key:  sk-xxxxxx
 ```
 
-### Google 离线翻译
+### Google offline translation
 
-无需配置，首次使用特定语言时会自动下载语言包（推荐 Wi-Fi 环境）。
+No configuration needed. Language packs download on first use of each language (Wi-Fi recommended).
 
-### 哔哩哔哩 Index-Translate
+Supported languages: Chinese, English, Japanese, Korean, French, German, Russian, Spanish, Italian, Portuguese, Thai, Vietnamese, Arabic.
 
-设置里选择「B站 Index-Translate（免 API）」即可，无需填 Endpoint 或 Key。可选模型：
+### Bilibili Index-Translate
 
-- `Index-Translate-35B-A3B`（推荐，质量最好）
+Select “Bilibili Index-Translate” in Settings — no endpoint or key required. Available models:
+
+- `Index-Translate-35B-A3B` (recommended, best quality)
 - `Index-Translate-9B`
-- `Index-Translate-2B`（最快）
+- `Index-Translate-2B` (fastest)
 
-代理内置了 B 站接口要求的 `enable_thinking=false` 参数（否则模型会输出思维链而非译文），并以流式方式请求以避开免费网关的超时限制。
+The client always injects `chat_template_kwargs: {"enable_thinking": false}`, which the endpoint requires; without it the model returns a chain-of-thought block instead of the translation. Requests are streamed to stay under the free gateway's timeout.
 
-支持语言：中文、英语、日语、韩语、法语、德语、俄语、西班牙语、意大利语、葡萄牙语、泰语、越南语、阿拉伯语
-
-## 项目结构
+## Project structure
 
 ```
 app/src/main/java/com/screentranslate/
-├── App.kt                          # Application 入口
-├── collector/                      # 屏幕文本采集
-│   ├── AccessibilityCollector.kt   # BFS 遍历无障碍节点树
-│   ├── TextNode.kt                 # 文本节点数据类（文本 + 位置）
-│   └── TextSorter.kt               # 按坐标排序 & 合并相邻文本
-├── translate/                      # 翻译引擎
-│   ├── Translator.kt               # 翻译接口
-│   ├── AiTranslator.kt             # AI API 翻译（OpenAI 兼容）
-│   ├── BiliIndexTranslator.kt      # 哔哩哔哩 Index-Translate 免费翻译
-│   ├── GoogleTranslator.kt         # ML Kit 离线翻译
-│   └── TranslationManager.kt       # 统筹调度 & LRU 缓存
+├── App.kt                          Application entry point
+├── collector/                      On-screen text collection
+│   ├── AccessibilityCollector.kt   BFS over the accessibility node tree
+│   ├── TextNode.kt                 Text node (text + bounds)
+│   └── TextSorter.kt               Position sorting, merging, point lookup
+├── translate/                      Translation engines
+│   ├── Translator.kt               Translator interface
+│   ├── AiTranslator.kt             OpenAI-compatible API
+│   ├── BiliIndexTranslator.kt      Bilibili Index-Translate
+│   ├── GoogleTranslator.kt         ML Kit offline translation
+│   ├── GoogleWebTranslator.kt      Google web
+│   ├── BingWebTranslator.kt        Bing web
+│   ├── BaiduWebTranslator.kt       Baidu web
+│   ├── YandexWebTranslator.kt      Yandex web
+│   └── TranslationManager.kt       Scheduling, cache, error reporting
 ├── overlay/
-│   └── OverlayManager.kt           # 悬浮窗管理（指示器 + 气泡）
-├── ocr/                            # OCR 模块
-│   ├── OcrEngine.kt                # ONNX 推理（检测 + 识别）
-│   ├── OcrTextCollector.kt         # 截图 + OCR 管线
-│   ├── ModelManager.kt             # OCR 模型下载管理
-│   └── ScreenCapture.kt            # MediaProjection 截图
+│   └── OverlayManager.kt           Floating button, paragraph “+”, bubbles
+├── ocr/                            OCR module
+│   ├── OcrEngine.kt                ONNX inference (detect + recognize)
+│   ├── OcrTextCollector.kt         Capture + OCR pipeline
+│   ├── ModelManager.kt             Model download and verification
+│   └── ScreenCapture.kt            MediaProjection screen capture
 ├── service/
-│   ├── TranslateAccessibilityService.kt  # 无障碍服务（核心）
-│   └── KeepAliveService.kt               # 保活前台服务
+│   ├── TranslateAccessibilityService.kt  Core accessibility service
+│   └── KeepAliveService.kt               Foreground keep-alive service
 ├── logger/
-│   └── L.kt                        # 日志工具
+│   └── L.kt                        In-memory + file logging
 └── ui/
-    ├── MainActivity.kt             # 主界面（权限引导 + 开关）
-    ├── SettingsActivity.kt         # 设置界面
-    ├── LogActivity.kt              # 日志查看器
-    └── TestActivity.kt             # OCR 测试页
+    ├── MainActivity.kt             Permission setup and start/stop
+    ├── SettingsActivity.kt         Engine / mask / overlay / logs / models
+    └── TestActivity.kt             OCR test text
 ```
 
-## 构建
+## Build
 
 ```bash
-# 构建 debug APK
+# Debug APK
 ./gradlew assembleDebug
 
-# 构建 release APK
+# Release APK (configure signing first)
 ./gradlew assembleRelease
 ```
 
-Release APK 位于 `app/build/outputs/apk/release/app-release.apk`。
+Debug output: `app/build/outputs/apk/debug/app-debug.apk`
+Release output: `app/build/outputs/apk/release/app-release.apk`
 
-## 致谢
+> Note: the debug APK is fairly large because it bundles ONNX Runtime and ML Kit native libraries for every ABI. Split by ABI for distribution if size matters.
 
-- [ML Kit](https://developers.google.com/ml-kit) — 离线翻译
-- [ONNX Runtime](https://onnxruntime.ai) — OCR 推理引擎
-- [PaddleOCR / PP-OCRv5](https://github.com/PaddlePaddle/PaddleOCR) — OCR 模型
-- [Jetpack Compose](https://developer.android.com/jetpack/compose) — UI 框架
+## Acknowledgements
 
-## 许可证
+- [ML Kit](https://developers.google.com/ml-kit) — offline translation
+- [ONNX Runtime](https://onnxruntime.ai) — OCR inference
+- [PaddleOCR / PP-OCRv5](https://github.com/PaddlePaddle/PaddleOCR) — OCR models
+- [Jetpack Compose](https://developer.android.com/jetpack/compose) — UI framework
+
+## License
 
 [Apache License 2.0](LICENSE)
